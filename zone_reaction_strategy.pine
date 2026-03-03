@@ -1,0 +1,90 @@
+//@version=5
+strategy("Zone Reaction Strategy (Photo-Based)", overlay=true, initial_capital=10000, commission_type=strategy.commission.percent, commission_value=0.04, pyramiding=0)
+
+// ----------------------------
+// Inputs
+// ----------------------------
+zoneLookback = input.int(50, "Zone Lookback Bars", minval=10)
+zoneWidthPct = input.float(0.25, "Zone Width (%)", minval=0.05, step=0.05)
+riskReward1 = input.float(1.0, "TP1 RR", minval=0.5, step=0.25)
+riskReward2 = input.float(2.0, "TP2 RR", minval=1.0, step=0.25)
+atrLen = input.int(14, "ATR Length", minval=5)
+slAtrMult = input.float(0.25, "SL ATR Buffer", minval=0.0, step=0.05)
+useTrendFilter = input.bool(true, "Use EMA Trend Filter")
+trendLen = input.int(200, "EMA Length", minval=20)
+
+// ----------------------------
+// Dynamic zones
+// ----------------------------
+recentHigh = ta.highest(high, zoneLookback)
+recentLow = ta.lowest(low, zoneLookback)
+zoneWidth = close * (zoneWidthPct / 100.0)
+
+supplyTop = recentHigh + zoneWidth
+supplyBottom = recentHigh - zoneWidth
+
+demandTop = recentLow + zoneWidth
+demandBottom = recentLow - zoneWidth
+
+// ----------------------------
+// Confirmation logic
+// ----------------------------
+bearishEngulfing = close < open and close[1] > open[1] and open >= close[1] and close <= open[1]
+bullishEngulfing = close > open and close[1] < open[1] and open <= close[1] and close >= open[1]
+
+inSupplyZone = high >= supplyBottom and low <= supplyTop
+inDemandZone = low <= demandTop and high >= demandBottom
+
+emaTrend = ta.ema(close, trendLen)
+longTrendOk = not useTrendFilter or close >= emaTrend
+shortTrendOk = not useTrendFilter or close <= emaTrend
+
+shortSignal = inSupplyZone and bearishEngulfing and shortTrendOk
+longSignal = inDemandZone and bullishEngulfing and longTrendOk
+
+// ----------------------------
+// Risk model
+// ----------------------------
+atr = ta.atr(atrLen)
+longSL = demandBottom - (atr * slAtrMult)
+shortSL = supplyTop + (atr * slAtrMult)
+
+longRisk = math.max(close - longSL, syminfo.mintick)
+shortRisk = math.max(shortSL - close, syminfo.mintick)
+
+longTP1 = close + longRisk * riskReward1
+longTP2 = close + longRisk * riskReward2
+shortTP1 = close - shortRisk * riskReward1
+shortTP2 = close - shortRisk * riskReward2
+
+// ----------------------------
+// Entries + exits (single position)
+// ----------------------------
+if longSignal and strategy.position_size == 0
+    strategy.entry("Long", strategy.long)
+    strategy.exit("Long TP1/SL", from_entry="Long", stop=longSL, limit=longTP1, qty_percent=50)
+    strategy.exit("Long TP2/SL", from_entry="Long", stop=longSL, limit=longTP2, qty_percent=50)
+
+if shortSignal and strategy.position_size == 0
+    strategy.entry("Short", strategy.short)
+    strategy.exit("Short TP1/SL", from_entry="Short", stop=shortSL, limit=shortTP1, qty_percent=50)
+    strategy.exit("Short TP2/SL", from_entry="Short", stop=shortSL, limit=shortTP2, qty_percent=50)
+
+// ----------------------------
+// Visuals
+// ----------------------------
+plot(useTrendFilter ? emaTrend : na, "EMA Trend", color=color.new(color.blue, 0), linewidth=2)
+
+supplyTopPlot = plot(supplyTop, "Supply Top", color=color.new(color.orange, 70))
+supplyBottomPlot = plot(supplyBottom, "Supply Bottom", color=color.new(color.orange, 70))
+fill(supplyTopPlot, supplyBottomPlot, color=color.new(color.orange, 88), title="Supply Zone")
+
+demandTopPlot = plot(demandTop, "Demand Top", color=color.new(color.green, 70))
+demandBottomPlot = plot(demandBottom, "Demand Bottom", color=color.new(color.green, 70))
+fill(demandTopPlot, demandBottomPlot, color=color.new(color.green, 88), title="Demand Zone")
+
+plotshape(longSignal, title="Long Signal", style=shape.labelup, location=location.belowbar, color=color.new(color.green, 0), text="Long", textcolor=color.white, size=size.tiny)
+plotshape(shortSignal, title="Short Signal", style=shape.labeldown, location=location.abovebar, color=color.new(color.red, 0), text="Short", textcolor=color.white, size=size.tiny)
+
+alertcondition(longSignal, title="Long Setup", message="Zone Reaction: Long setup detected")
+alertcondition(shortSignal, title="Short Setup", message="Zone Reaction: Short setup detected")
